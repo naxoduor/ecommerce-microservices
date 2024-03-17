@@ -1,0 +1,228 @@
+---
+version: '3.7'
+networks:
+  spring:
+    driver: bridge
+  myNetwork:
+    driver: bridge
+services:
+  zookeeper:
+    restart: always
+    image: bitnami/zookeeper:latest
+    ports:
+      - "2181:2181"
+    volumes:
+      - "zookeeper-volume:/bitnami"
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+  kafka:
+    restart: always
+    image: bitnami/kafka:latest
+    ports:
+      - "9093:9093"
+    volumes:
+      - "kafka-volume:/bitnami"
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=CLIENT://:9092,EXTERNAL://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://localhost:9093
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=CLIENT
+    depends_on:
+      - zookeeper
+
+  zipkin:
+    image: openzipkin/zipkin
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+
+  postgres-order:
+    container_name: postgres-order
+    image: postgres
+    environment:
+      POSTGRES_DB: order-service
+      POSTGRES_USER:  ptechie
+      POSTGRES_PASSWORD: password
+      PGDATA: /data/postgres
+    volumes:
+      - ./postgres-order:/data/postgres
+    expose:
+      - "5431"
+    ports:
+      - "5431:5431"
+    command: -p 5431
+    restart: unless-stopped
+    networks:
+          - myNetwork
+
+  postgres-inventory:
+    container_name: postgres-inventory
+    image: postgres
+    environment:
+      POSTGRES_DB: inventory-service
+      POSTGRES_USER: ptechie
+      POSTGRES_PASSWORD: password
+      PGDATA: /data/postgres
+    volumes:
+      - ./postgres-inventory:/data/postgres
+    ports:
+      - "5432:5432"
+    restart: always
+    networks:
+      - myNetwork
+
+  mongo:
+    image: mongo:4.4.14-rc0-focal
+    container_name: mongo
+    restart: always
+    ports:
+      - "27107:27017"
+    expose:
+      - "27017"
+      volumes:
+        - ./mongo-data:/data/db
+
+
+  discovery-server:
+    image:  naxoduor/discovery-server:latest
+    container_name: discovery-server
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+    depends_on:
+      - zipkin
+    networks:
+      - spring
+
+  api-gateway:
+    image: naxoduor/api-gateway:latest
+    container_name: api-gateway
+    ports:
+      - "8181:8080"
+    expose:
+      - "8181"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY=TRACE
+    depends_on:
+      - zipkin
+      - discovery-server
+    networks:
+      - spring
+
+  order-service:
+    container_name: order-service
+    image:  naxoduor/order-service:latest
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-order:5431/order-service
+      - SPRING_DATASOURCE_USERNAME=ptechie
+      - SPRING_DATASOURCE_PASSWORD=password
+      - SPRING_JPA_HIBERNATE_DDL_AUTO=update
+      - SPRING_PROFILES_ACTIVE=docker
+    depends_on:
+      - postgres-order
+      - kafka
+      - zipkin
+      - discovery-server
+      - api-gateway
+    networks:
+          - spring
+          - myNetwork
+
+  inventory-service:
+    container_name: inventory-service
+    image: naxoduor/inventory-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres-inventory:5432/inventory-service
+    depends_on:
+      - postgres-inventory
+      - discovery-server
+      - api-gateway
+    networks:
+      - spring
+      - myNetwork
+
+
+  notification-service:
+    container_name: notification-service
+    image: naxoduor/notification-service
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+    depends_on:
+      - zipkin
+      - kafka
+      - discovery-server
+      - api-gateway
+
+
+
+
+volumes:
+  kafka-volume:
+  zookeeper-volume:
+
+
+
+
+
+
+#  product-service:
+#    container_name: product-service
+#    image:  naxoduor/product-service:latest
+#    environment:
+#      - SPRING_PROFILES_ACTIVE=docker
+#    depends_on:
+#      - mongo
+#      - discovery-server
+#      - api-gateway
+
+
+
+
+#version: "3.4"
+#services:
+#  zookeeper:
+#    image: confluent/zookeeper
+#    container_name: zookeeper
+#    environment:
+#      - ZOOKEEPER_CLIENT_PORT=2181
+#    networks:
+#      - kafka_net
+#  kafka:
+#    image: confluent/kafka
+#    container_name: broker
+#    environment:
+#      kafka_broker_id: 1
+#      kafka_zookeeper_connect: 'zookeeper:2181'
+#      allow_plaintext_listener: "yes"
+#      kafka_listener_security_protocol_map: plaintext:plaintext,plaintext_host:plaintext
+#      kafka_listeners: plaintext://:9092,plaintext_host://0.0.0.0:29092
+#      kafka_advertised_listeners: plaintext://kafka:9092,plaintext_host://localhost:29092
+#
+#    #      KAFKA_BROKER_ID: 1
+##      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+##      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+##      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+##      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+##      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+##      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+##      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+#
+#
+#    #      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+##      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+##      ADVERTISED_HOST_NAME: localhost
+#    depends_on:
+#      - zookeeper
+#    networks:
+#      - kafka_net
+#    restart: on-failure
+#networks:
+#  kafka_net:
+#    driver: "bridge"
